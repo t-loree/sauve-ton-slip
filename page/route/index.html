@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+	<meta name="referrer" content="strict-origin-when-cross-origin">
+	<title>Itinéraire — Sauve ton slip</title>
+	<link rel="manifest" href="../../manifest.json">
+	<meta name="theme-color" content="#F5F1E8" media="(prefers-color-scheme: light)">
+	<meta name="theme-color" content="#0E1A24" media="(prefers-color-scheme: dark)">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="black">
+	<meta name="apple-mobile-web-app-title" content="Sauve ton slip">
+	<link rel="apple-touch-icon" href="../../img/apple-touch-icon.png">
+	<link rel="icon" href="../../img/logo.svg" type="image/svg+xml">
+	<link rel="stylesheet" href="../../css/ol.css">
+	<link rel="stylesheet" href="../../css/cyclo.css">
+	<link rel="stylesheet" href="../../css/nav.css">
+	<script src="../../js/lib/ol.js"></script>
+	<style>
+
+		/* points de départ / arrivée */
+		.points { display: grid; gap: .5rem; }
+		.point { display: flex; align-items: center; gap: .7rem; padding: .55rem .7rem; border-radius: 12px; background: var(--surface-2); font-size: .92rem; }
+		.point b { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: .8rem; flex: none; }
+		.point.a b { background: var(--brand); }
+		.point.b b { background: var(--danger); }
+		.point span { color: var(--ink-2); }
+		.point.set span { color: var(--ink); font-weight: 600; }
+		#status { margin-top: .7rem; font-size: .88rem; color: var(--ink-2); }
+
+		#results .stats { margin-bottom: .9rem; }
+		#r-compare:empty, #r-perf:empty { display: none; }
+		#r-compare { margin-top: .8rem; font-size: .88rem; padding: .6rem .75rem; border-radius: 10px; background: var(--brand-soft); color: var(--ink); }
+		#r-perf { margin-top: .5rem; }
+		.elev-wrap { margin-top: 1rem; }
+		#elev { width: 100%; height: 120px; display: block; cursor: crosshair; touch-action: none; }
+		#elev-info { min-height: 1.2em; margin-top: .2rem; }
+
+		.chip .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .4rem; vertical-align: .05em; }
+		.flat-desc { margin: .35rem 0 0; font-size: .85rem; color: var(--ink-2); }
+		.legend { margin: 1rem .2rem .3rem; }
+		#graph-info { margin: .3rem .2rem 0; }
+
+		/* smartphone : carte en haut, panneau dessous */
+		@media (max-width: 899px) {
+			.stats { grid-template-columns: repeat(2, 1fr); }
+			.points { grid-template-columns: 1fr 1fr; }
+			.point { font-size: .85rem; padding: .45rem .55rem; gap: .5rem; }
+		}
+	</style>
+</head>
+
+<body data-page="route">
+	<main class="planner">
+		<aside class="panel">
+			<h1>Itinéraire</h1>
+
+			<div class="card">
+				<div class="points">
+					<div class="point a" id="pt-a"><b>A</b><span>Départ : touchez la carte</span></div>
+					<div class="point b" id="pt-b"><b>B</b><span>Arrivée : touchez la carte</span></div>
+				</div>
+				<div class="btn-row" style="margin-top: .7rem;">
+					<button class="btn btn-sm" id="btn-here"><svg class="icon"><use href="../../img/icons.svg#i-locate"/></svg>Partir de ma position</button>
+				</div>
+				<p id="status">Chargement du réseau…</p>
+			</div>
+
+			<div class="card is-hidden" id="results">
+				<div class="stats">
+					<div class="stat"><div class="k"><svg class="icon"><use href="../../img/icons.svg#i-ruler"/></svg>Distance</div><div class="v" id="r-dist"></div></div>
+					<div class="stat"><div class="k"><svg class="icon"><use href="../../img/icons.svg#i-clock"/></svg>Durée</div><div class="v" id="r-time"></div></div>
+					<div class="stat"><div class="k"><svg class="icon"><use href="../../img/icons.svg#i-up"/></svg>D+</div><div class="v" id="r-dplus"></div></div>
+					<div class="stat"><div class="k"><svg class="icon"><use href="../../img/icons.svg#i-down"/></svg>D−</div><div class="v" id="r-dminus"></div></div>
+				</div>
+				<div class="btn-row">
+					<button class="btn btn-primary btn-lg" id="btn-nav"><svg class="icon"><use href="../../img/icons.svg#i-play"/></svg>Naviguer</button>
+					<button class="btn btn-lg btn-ghost" id="btn-sim" title="Rejoue l'itinéraire à ~65 km/h, sans GPS">Simuler</button>
+				</div>
+				<p id="r-compare"></p>
+				<div class="elev-wrap">
+					<canvas id="elev" aria-label="Profil altimétrique"></canvas>
+					<p class="tiny" id="elev-info"></p>
+				</div>
+				<p class="tiny" id="r-perf"></p>
+			</div>
+
+			<div class="card" id="poibox">
+				<div class="card-title" style="margin: 0;"><svg class="icon"><use href="../../img/icons.svg#i-pin"/></svg>Sur la carte</div>
+				<div class="chips" id="poi-chips"></div>
+				<p class="tiny" style="margin: .6rem 0 0;">Touchez un point pour en faire le départ ou l'arrivée.</p>
+			</div>
+
+			<div class="card" id="profile">
+				<div class="card-title" style="margin: 0;"><svg class="icon"><use href="../../img/icons.svg#i-sliders"/></svg>Façon de rouler</div>
+				<div class="segmented" style="margin-top: .8rem;">
+					<button class="is-active" data-preset="balanced">Équilibré</button>
+					<button data-preset="quiet">Tranquille</button>
+					<button data-preset="fast">Rapide</button>
+					<button data-preset="vtt">Chemins</button>
+				</div>
+				<details class="fold fold-sub" id="profile-more">
+				<summary>Affiner les réglages et ma vitesse<svg class="icon chev"><use href="../../img/icons.svg#i-chevron"/></svg></summary>
+				<div class="field">
+					<label for="p-traffic">Éviter le trafic <span class="val" id="p-traffic-v"></span></label>
+					<input type="range" id="p-traffic" min="0" max="2" step="0.1">
+				</div>
+				<div class="field">
+					<label for="p-hills">Éviter le dénivelé <span class="val" id="p-hills-v"></span></label>
+					<input type="range" id="p-hills" min="0" max="3" step="0.1">
+				</div>
+				<div class="field">
+					<label for="p-thr">Seuil de pente raide <span class="val" id="p-thr-v"></span></label>
+					<input type="range" id="p-thr" min="3" max="15" step="0.5">
+				</div>
+				<div class="field">
+					<label for="p-steep">Éviter les pentes au-delà du seuil <span class="val" id="p-steep-v"></span></label>
+					<input type="range" id="p-steep" min="0" max="5" step="0.1">
+				</div>
+				<div class="field">
+					<label for="p-unpaved">Éviter les chemins non revêtus <span class="val" id="p-unpaved-v"></span></label>
+					<input type="range" id="p-unpaved" min="0" max="3" step="0.1">
+				</div>
+				<div class="checks">
+					<label class="check"><input type="checkbox" id="p-dismount"> Passages pied à terre</label>
+					<label class="check"><input type="checkbox" id="p-steps"> Escaliers</label>
+				</div>
+				<div class="speeds" id="speeds">
+					<div class="speeds-title">Ma vitesse <span class="tiny">pour le temps estimé, sur route</span></div>
+					<div class="field">
+						<label for="s-flat">Sur le plat <span class="val" id="s-flat-v"></span></label>
+						<input type="range" id="s-flat" min="8" max="35" step="1">
+					</div>
+					<div class="field">
+						<label for="s-up">En montée (côte à 6 %) <span class="val" id="s-up-v"></span></label>
+						<input type="range" id="s-up" min="3" max="25" step="1">
+					</div>
+					<div class="field">
+						<label for="s-down">En descente, au plus <span class="val" id="s-down-v"></span></label>
+						<input type="range" id="s-down" min="15" max="60" step="1">
+					</div>
+				</div>
+				</details>
+			</div>
+
+			<div class="card" id="flatbox">
+				<label class="switch">
+					<span class="card-title" style="margin: 0;"><svg class="icon"><use href="../../img/icons.svg#i-wave"/></svg>Le plus plat possible</span>
+					<input type="checkbox" id="p-flat">
+				</label>
+				<p class="flat-desc">Minimise la montée en acceptant un détour. L'itinéraire normal reste affiché en pointillé.</p>
+				<div class="field">
+					<label for="p-detour">Détour accepté <span class="val" id="p-detour-v"></span></label>
+					<input type="range" id="p-detour" min="0" max="21" step="1" value="6">
+				</div>
+			</div>
+
+			<p class="legend">
+				<span><i style="background:#2E7DB5"></i>descente</span>
+				<span><i style="background:#3C9A5F"></i>≤ 3 %</span>
+				<span><i style="background:#E3B23C"></i>≤ 6 %</span>
+				<span><i style="background:#E07B2E"></i>≤ 10 %</span>
+				<span><i style="background:#C8402F"></i>&gt; 10 %</span>
+			</p>
+			<p class="tiny" id="graph-info"></p>
+			<p class="tiny" style="margin: .6rem .2rem 0;">Réseau © contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Altitudes RGE ALTI® © IGN</p>
+		</aside>
+
+		<section class="mapwrap">
+			<div id="map"></div>
+		</section>
+	</main>
+
+	<!-- écran de navigation -->
+	<div id="nav" class="is-hidden">
+		<div id="nav-banner">
+			<div id="nav-arrow"></div>
+			<div>
+				<div id="nav-dist"></div>
+				<div id="nav-text"></div>
+			</div>
+		</div>
+		<div id="nav-body">
+			<div id="nav-map" class="is-hidden"></div>
+			<canvas id="nav-schema" class="is-hidden"></canvas>
+			<div id="nav-big" class="is-hidden">
+				<div id="nav-big-arrow"></div>
+				<div id="nav-big-dist"></div>
+				<div id="nav-big-text"></div>
+				<div id="nav-big-bar"><div id="nav-big-progress"></div></div>
+			</div>
+			<div id="nav-band"></div>
+		</div>
+		<div id="nav-bottom">
+			<div id="nav-info">
+				<span id="nav-remain"></span>
+				<span id="nav-sim" class="is-hidden">SIMULATION</span>
+				<span id="nav-gps" data-kind="search">GPS…</span>
+			</div>
+			<div id="nav-controls">
+				<button id="nav-eco">Économe : non</button>
+				<div id="nav-displays" class="is-hidden">
+					<button data-navdisplay="map">Carte</button>
+					<button data-navdisplay="schema">Schéma</button>
+					<button data-navdisplay="arrow">Flèche</button>
+				</div>
+				<button id="nav-exit">Quitter</button>
+			</div>
+		</div>
+	</div>
+
+	<script src="../../js/script/layout.js"></script>
+	<script src="../../js/script/poi.js"></script>
+	<script src="../../js/script/router.js"></script>
+	<script src="../../js/script/nav.js"></script>
+	<script src="../../js/script/routePage.js"></script>
+</body>
+
+</html>
