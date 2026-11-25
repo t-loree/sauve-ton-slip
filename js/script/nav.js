@@ -208,6 +208,13 @@ class NavUI {
 		document.addEventListener('visibilitychange', () => this._onVisibility());
 	}
 
+	// changement de région (page itinéraire) : autre graphe
+	setRouter(router) {
+		this.ctx.router = router;
+		this.core = new NavCore(router);
+		this.grid = null;
+	}
+
 	_bindUI() {
 		this.el('nav-exit').addEventListener('click', () => this.stop());
 		this.el('nav-eco').addEventListener('click', () => this.setEco(!this.eco));

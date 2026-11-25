@@ -2,7 +2,7 @@
 // Stratégie « stale-while-revalidate » : réponse immédiate depuis le cache (aucune attente
 // réseau, économe en batterie), mise à jour du cache en arrière-plan pour la fois suivante.
 // Changer CACHE force le re-téléchargement complet.
-const CACHE = 'cyclo-v27';
+const CACHE = 'cyclo-v31';
 const DEV = ['localhost', '127.0.0.1'].includes(self.location.hostname);
 
 const ASSETS = [
@@ -33,11 +33,11 @@ const ASSETS = [
 	'img/icon-192.png',
 	'img/icon-512.png',
 	'favicon.ico',
-	'data/toilet_pls.geojson',
-	'data/repair_pls.geojson',
-	'data/parking_pls.geojson',
-	'data/water_all_pls.geojson',
-	'data/graph/bretagne/meta.json',    // index ; les tuiles t/*.bin sont mises en cache à l'usage
+	// points de service par région (pipeline/04_poi.py) et index des graphes ; les tuiles t/*.bin.gz sont mises en cache à l'usage
+	...['bretagne', 'reunion'].flatMap(r => [
+		...['toilet', 'water', 'repair', 'parking'].map(s => `data/poi/${r}/${s}.geojson`),
+		`data/graph/${r}/meta.json`,
+	]),
 ];
 
 // Installation : mise en cache fichier par fichier (un fichier manquant ne bloque pas le reste)

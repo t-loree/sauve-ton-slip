@@ -1,6 +1,6 @@
 // Planificateur d'itinéraire (page/route/). Dépend de ol.js, poi.js, router.js et nav.js.
-
-const GRAPH_URL = ROUTER_GRAPH_URL;
+// Région (REGIONS de router.js) choisie automatiquement : départ placé, sinon centre de la carte ;
+// chaque région a son graphe et ses points de service.
 
 const PRESETS = {
 	balanced: { traffic: 1, hills: 1, steep: 1, steepThreshold: 6, unpaved: 0.5, allowDismount: true, allowSteps: false },
@@ -17,7 +17,7 @@ const statusEl = $('status');
 const map = new ol.Map({
 	target: 'map',
 	layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-	view: new ol.View({ center: [-4.1024, 47.996], zoom: 13, projection: 'EPSG:4326' }),
+	view: new ol.View({ center: REGIONS[lastRegion()].center, zoom: 13, projection: 'EPSG:4326' }),
 });
 map.addControl(new ol.control.ScaleLine({ units: 'metric' }));
 
@@ -82,7 +82,14 @@ function updatePoints() {
 	set('pt-b', !!markers.B, 'Arrivée placée', 'Arrivée : touchez la carte');
 }
 function setMarker(label, coord) {
-	if (label === 'A') pointLabel.A = null;
+	if (label === 'A') {
+		pointLabel.A = null;
+		const r = regionAt(...coord);
+		if (r && r !== region) {                     // départ dans une autre région : son graphe, arrivée effacée
+			if (markers.B) { markerSource.removeFeature(markers.B); markers.B = null; }
+			useRegion(r);
+		}
+	}
 	queueMicrotask(updatePoints);
 	if (!markers[label]) {
 		markers[label] = new ol.Feature({ geometry: new ol.geom.Point(coord), label });
@@ -107,6 +114,21 @@ const poiLayers = {};                       // id -> { layer, source, feats }
 let poiOn = new Set();
 try { poiOn = new Set(JSON.parse(localStorage.getItem(POI_KEY)) || []); } catch (e) { /* stockage indisponible */ }
 
+// points du service pour la région courante
+async function loadPoi(id) {
+	const l = poiLayers[id], r = region;
+	l.region = r;
+	l.feats = null;
+	l.source.clear();
+	try {
+		const feats = await POI.load(id, r);
+		if (l.region === r) l.feats = feats;
+	} catch (err) {
+		console.error(err);
+		statusEl.textContent = `Impossible de charger : ${SERVICES[id].title}.`;
+	}
+}
+
 // les sanitaires du fichier « eau » sont les toilettes : pas de doublon si les deux sont affichés
 function fillPoi(id) {
 	const l = poiLayers[id];
@@ -122,13 +144,8 @@ async function showPoi(id, on) {
 	if (on && !poiLayers[id]) {
 		poiLayers[id] = POI.clusterLayer(id, { distance: 36, radius: 13, zIndex: 5 });
 		map.addLayer(poiLayers[id].layer);
-		try {
-			poiLayers[id].feats = await POI.load(id);
-		} catch (err) {
-			console.error(err);
-			statusEl.textContent = `Impossible de charger : ${SERVICES[id].title}.`;
-		}
 	}
+	if (on && poiLayers[id] && poiLayers[id].region !== region && region) await loadPoi(id);
 	if (poiLayers[id]) { poiLayers[id].layer.setVisible(poiOn.has(id)); fillPoi(id); }
 	if (id === 'toilet') fillPoi('water');
 }
@@ -263,6 +280,7 @@ Object.values(SPEED_IDS).forEach(id => $(id).addEventListener('input', () => {
 // ------------------------------------------------------------------ calcul
 let router = null;
 let nav = null;
+let region = null;
 
 function drawRoute(r) {
 	routeSource.clear();
@@ -343,6 +361,11 @@ function clearResults() {
 let computeSeq = 0;
 async function computeRoute() {
 	if (!router || !markers.A || !markers.B) return;
+	if ([markers.A, markers.B].some(m => regionAt(...m.getGeometry().getCoordinates()) !== region)) {
+		routeSource.clear(); refSource.clear(); clearResults();
+		statusEl.textContent = `Départ et arrivée doivent être tous deux dans ${REGIONS[region].label}.`;
+		return;
+	}
 	const seq = ++computeSeq;
 	const profile = readProfile();
 	const [la, pa] = markers.A.getGeometry().getCoordinates();
@@ -370,7 +393,7 @@ async function computeRoute() {
 	routeSource.clear();
 	refSource.clear();
 	if (!r) {
-		statusEl.textContent = sa.node < 0 || sb.node < 0 ? `Point hors de la zone couverte (${ROUTER_ZONE_LABEL}).` : 'Aucun itinéraire trouvé avec ce profil.';
+		statusEl.textContent = sa.node < 0 || sb.node < 0 ? `Point hors de la zone couverte (${REGIONS[region].label}).` : 'Aucun itinéraire trouvé avec ce profil.';
 		clearResults();
 		return;
 	}
@@ -418,7 +441,7 @@ function drawProfile(hoverX = null) {
 	ctx.scale(dpr, dpr);
 	ctx.clearRect(0, 0, W, H);
 	if (!lastRoute) return;
-	const P = lastRoute.profile;
+	const P = lastRoute.elev;
 	const padL = 40, padR = 8, padT = 8, padB = 20;
 	const dmax = P[P.length - 1][0] || 1;
 	let zmin = Infinity, zmax = -Infinity;
@@ -438,8 +461,7 @@ function drawProfile(hoverX = null) {
 
 	for (let i = 1; i < P.length; i++) {
 		const [d0, z0] = P[i - 1], [d1, z1] = P[i];
-		const seg = lastRoute.segments[i - 1];
-		ctx.fillStyle = gradeColor(seg.grade);
+		ctx.fillStyle = gradeColor(d1 > d0 ? (z1 - z0) / (d1 - d0) * 100 : 0);
 		ctx.beginPath();
 		const x1 = X(d1) + 0.75;
 		ctx.moveTo(X(d0), H - padB); ctx.lineTo(X(d0), Y(z0)); ctx.lineTo(x1, Y(z1)); ctx.lineTo(x1, H - padB);
@@ -458,40 +480,45 @@ canvas.addEventListener('mousemove', ev => {
 	drawProfile(x);
 	hoverSource.clear();
 	hoverSource.addFeature(new ol.Feature(new ol.geom.Point(lastRoute.line.getCoordinateAt(d / lastRoute.distance))));
-	const P = lastRoute.profile;
+	const P = lastRoute.elev;
 	let i = 1; while (i < P.length - 1 && P[i][0] < d) i++;
-	$('elev-info').textContent = `${(d / 1000).toFixed(2)} km · ${Math.round(P[i][1])} m · pente ${lastRoute.segments[i - 1].grade.toFixed(1)} % · ${lastRoute.segments[i - 1].cls}`;
+	const [d0, z0] = P[i - 1], [d1, z1, cls] = P[i];
+	const z = d1 > d0 ? z0 + (z1 - z0) * (d - d0) / (d1 - d0) : z1;
+	const g = d1 > d0 ? (z1 - z0) / (d1 - d0) * 100 : 0;
+	$('elev-info').textContent = `${(d / 1000).toFixed(2)} km · ${Math.round(z)} m · pente ${g.toFixed(1)} % · ${cls}`;
 });
 canvas.addEventListener('mouseleave', () => { hoverSource.clear(); drawProfile(); $('elev-info').textContent = ''; });
 window.addEventListener('resize', () => drawProfile());
 
-// ------------------------------------------------------------------ chargement du graphe
-(async () => {
+// ------------------------------------------------------------------ région et graphe
+// Graphe de la région (index seulement, tuiles à la demande), contour couvert, points de service affichés.
+async function useRegion(id) {
+	if (id === region) return;
+	region = id;
+	rememberRegion(id);
+	router = null;                               // pas de calcul pendant le chargement
+	lastRoute = null;
+	routeSource.clear(); refSource.clear(); coverageSource.clear(); clearResults();
+	Object.keys(poiLayers).forEach(k => { if (poiOn.has(k)) loadPoi(k).then(() => { fillPoi(k); if (k === 'toilet') fillPoi('water'); }); });
+	let r;
 	try {
-		router = await BikeRouter.load(GRAPH_URL);
+		r = await routerFor(id);
 	} catch (err) {
-		statusEl.textContent = 'Impossible de charger le graphe.';
+		if (region === id) statusEl.textContent = 'Impossible de charger le graphe.';
 		console.error(err);
 		return;
 	}
+	if (region !== id) return;                   // une autre région demandée entre-temps
+	router = r;
+	router.speeds = readSpeeds();
 	const [w, s, e, n] = router.meta.bbox_wgs84;
 	// zone couverte : contour du graphe (meta.contour, pipeline 03), sinon son emprise
 	const rings = router.meta.contour || [[[w, s], [e, s], [e, n], [w, n], [w, s]]];
-	rings.forEach(r => coverageSource.addFeature(new ol.Feature(new ol.geom.Polygon([r]))));
-	$('graph-info').textContent = `Réseau local : ${router.E.toLocaleString('fr')} tronçons dans ${ROUTER_ZONE_LABEL}, `
+	rings.forEach(ring => coverageSource.addFeature(new ol.Feature(new ol.geom.Polygon([ring]))));
+	$('graph-info').textContent = `Réseau local : ${router.E.toLocaleString('fr')} tronçons dans ${REGIONS[id].label}, `
 		+ `en ${router.tiles.length} tuiles chargées au besoin.`;
-	statusEl.textContent = 'Touchez la carte pour placer le départ, ou partez de votre position.';
-	// lien depuis une page de service : ?a=lon,lat&b=lon,lat[&from=me][&svc=<service>]
-	const q = new URLSearchParams(location.search);
-	const parse = v => { const c = (v || '').split(',').map(Number); return c.length === 2 && c.every(Number.isFinite) ? c : null; };
-	const qa = parse(q.get('a')), qb = parse(q.get('b'));
-	if (qa && qb) {
-		setMarker('A', qa);
-		setMarker('B', qb);
-		if (q.get('from') === 'me') pointLabel.A = 'Ma position';
-		computeRoute();
-	}
-	nav = new NavUI({
+	if (nav) nav.setRouter(router);
+	else nav = new NavUI({
 		router, map,
 		profile: readProfile,
 		reroute: rerouteFrom,
@@ -501,4 +528,28 @@ window.addEventListener('resize', () => drawProfile());
 			map.getView().fit(routeSource.getExtent(), { padding: [40, 40, 40, 40], maxZoom: 16 });
 		},
 	});
+	if (markers.A && markers.B) computeRoute();
+	else statusEl.textContent = markers.A ? 'Touchez la carte pour placer l’arrivée.' : 'Touchez la carte pour placer le départ, ou partez de votre position.';
+}
+
+// carte déplacée vers une autre région, sans départ placé : on change de région
+map.on('moveend', () => {
+	if (markers.A || !$('nav').classList.contains('is-hidden')) return;
+	const r = regionAt(...map.getView().getCenter());
+	if (r && r !== region) useRegion(r);
+});
+
+(async () => {
+	// lien depuis une page de service : ?a=lon,lat&b=lon,lat[&from=me][&svc=<service>]
+	const q = new URLSearchParams(location.search);
+	const parse = v => { const c = (v || '').split(',').map(Number); return c.length === 2 && c.every(Number.isFinite) ? c : null; };
+	const qa = parse(q.get('a')), qb = parse(q.get('b'));
+	const start = (qa && regionAt(...qa)) || lastRegion();
+	if (qa && qb) {
+		map.getView().setCenter(qa);
+		setMarker('A', qa);
+		setMarker('B', qb);
+		if (q.get('from') === 'me') pointLabel.A = 'Ma position';
+	}
+	await useRegion(start);
 })();

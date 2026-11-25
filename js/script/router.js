@@ -2,9 +2,39 @@
 // pipeline/03_build_graph.py (web-site/data/graph/<nom>/meta.json + t/<i>_<j>.bin), A* pondéré.
 
 
-// graphe servi (pipeline/config.py : ZONE["nom"]) ; SITE (layout.js) = racine du site, absente sous Node
-const ROUTER_GRAPH_URL = (typeof SITE !== 'undefined' ? SITE : '') + 'data/graph/bretagne';
-const ROUTER_ZONE_LABEL = 'la Bretagne';             // pour les messages « hors zone »
+// Régions servies (pipeline/config.py : ZONES), choisies automatiquement d'après la position ou la carte.
+// Chacune a son graphe (data/graph/<id>/) et ses POI (data/poi/<id>/). bbox = emprise WGS84 [O, S, E, N]
+// un peu plus large que le graphe ; center = vue par défaut. SITE (layout.js) = racine du site, absente sous Node.
+const REGIONS = {
+	bretagne: { label: 'la Bretagne', bbox: [-5.3, 47.2, -0.9, 49.0], center: [-4.1024, 47.996] },
+	reunion: { label: 'La Réunion', bbox: [55.1, -21.5, 56.0, -20.75], center: [55.4504, -20.8789] },
+};
+const REGION_KEY = 'sts-region';
+const REGION_ROOT = typeof SITE !== 'undefined' ? SITE : '';
+const regionGraphUrl = id => `${REGION_ROOT}data/graph/${id}`;
+
+// région qui contient le point, sinon null
+function regionAt(lon, lat) {
+	for (const [id, r] of Object.entries(REGIONS)) {
+		const [w, s, e, n] = r.bbox;
+		if (lon >= w && lon <= e && lat >= s && lat <= n) return id;
+	}
+	return null;
+}
+
+// dernière région vue (mémorisée), Bretagne par défaut
+function lastRegion() {
+	try { const r = localStorage.getItem(REGION_KEY); if (REGIONS[r]) return r; } catch (e) { /* stockage indisponible */ }
+	return 'bretagne';
+}
+function rememberRegion(id) { try { localStorage.setItem(REGION_KEY, id); } catch (e) { /* idem */ } }
+
+// un BikeRouter par région, chargé une fois (index seulement ; les tuiles viennent à la demande)
+const ROUTERS = {};
+function routerFor(id) {
+	return ROUTERS[id] || (ROUTERS[id] = BikeRouter.load(regionGraphUrl(id)).catch(err => { delete ROUTERS[id]; throw err; }));
+}
+const ROUTER_REGIONS_LABEL = Object.values(REGIONS).map(r => r.label).join(' et ');   // messages « hors zone »
 const ROUTER_MAX_SNAP_M = 3000;                      // au-delà, le point est hors du réseau (node = -1)
 
 const ROUTER_SPEEDS_KMH = {           // vitesse de base selon le revêtement
@@ -105,7 +135,7 @@ class BikeRouter {
 		if (meta.format !== 3) throw new Error(`format de graphe ${meta.format} non pris en charge`);
 		this.meta = meta;
 		this.fetchTile = fetchTile;
-		const N = this.N = meta.nodes, E = this.E = meta.edges, G = meta.geom, A = meta.adj, NB = meta.climb_bins;
+		const N = this.N = meta.nodes, E = this.E = meta.edges, G = meta.geom, A = meta.adj, NB = meta.climb_bins, P = meta.prof || 0;
 		this.speeds = routerSavedSpeeds();
 		// tableaux globaux, remplis tuile par tuile (les plages d'une tuile sont contiguës)
 		this.f = {
@@ -115,6 +145,8 @@ class BikeRouter {
 			edge_climb: new Uint16Array(E * 2 * NB), edge_cls: new Uint8Array(E), edge_sur: new Uint8Array(E), edge_flg: new Uint8Array(E),
 			geom_off: new Uint32Array(E + 1), geom_lon: new Int32Array(G), geom_lat: new Int32Array(G),
 			adj_off: new Uint32Array(N + 1), adj: new Uint32Array(A),
+			// profil simplifié (points intérieurs) : position = fraction de longueur depuis u × 65535, altitude dm
+			prof_off: new Uint32Array(E + 1), prof_pos: new Uint16Array(P), prof_z: new Int16Array(P),
 		};
 		this.lon = new Float64Array(N);
 		this.lat = new Float64Array(N);
@@ -202,6 +234,13 @@ class BikeRouter {
 				x += a.geom_dlon[p]; y += a.geom_dlat[p];
 				f.geom_lon[g0 + p] = x; f.geom_lat[g0 + p] = y;
 			}
+		}
+		// profil simplifié (absent des graphes plus anciens : le tronçon reste une droite entre ses nœuds)
+		if (a.prof_off && t.p0 !== undefined) {
+			for (let k = 0; k <= ec; k++) f.prof_off[e0 + k] = t.p0 + a.prof_off[k];
+			f.prof_pos.set(a.prof_pos, t.p0); f.prof_z.set(a.prof_z, t.p0);
+		} else {
+			f.prof_off.fill(f.prof_off[e0], e0, e0 + ec + 1);
 		}
 		// adjacence (index globaux de tronçons, y compris ceux des tuiles voisines)
 		for (let k = 0; k <= nc; k++) f.adj_off[n0 + k] = a0 + a.adj_off[k];
@@ -561,6 +600,23 @@ class BikeRouter {
 		return pts;
 	}
 
+	// Profil du tronçon e : [[fraction de longueur depuis u, altitude m], …], nœuds u et v compris
+	edgeElev(e) {
+		const f = this.f, out = [[0, f.node_z[f.edge_u[e]] * 0.1]];
+		for (let k = f.prof_off[e]; k < f.prof_off[e + 1]; k++) out.push([f.prof_pos[k] / 65535, f.prof_z[k] * 0.1]);
+		out.push([1, f.node_z[f.edge_v[e]] * 0.1]);
+		return out;
+	}
+
+	// Altitude au point de fraction fr du tronçon e (interpolée sur son profil)
+	elevAt(e, fr) {
+		const P = this.edgeElev(e);
+		let k = 1;
+		while (k < P.length - 1 && P[k][0] < fr) k++;
+		const [f0, z0] = P[k - 1], [f1, z1] = P[k];
+		return f1 > f0 ? z0 + (z1 - z0) * (fr - f0) / (f1 - f0) : z0;
+	}
+
 	// Points de la portion [f0, f1] du tronçon e (fractions de longueur depuis u), dans le sens f0 -> f1
 	sliceEdge(e, f0, f1) {
 		if (f0 > f1) return this.sliceEdge(e, f1, f0).reverse();
@@ -584,7 +640,7 @@ class BikeRouter {
 	// portion parcourue ; altitude du point interpolée entre les extrémités.
 	_describe(start, steps, cost, explored, ms) {
 		const f = this.f;
-		const zAt = (e, fr) => (f.node_z[f.edge_u[e]] + (f.node_z[f.edge_v[e]] - f.node_z[f.edge_u[e]]) * fr) * 0.1;
+		const zAt = (e, fr) => this.elevAt(e, fr);
 		let coords, z0, n0;
 		if (steps.length && steps[0].f0 !== undefined) {
 			const s0 = steps[0];
@@ -595,8 +651,9 @@ class BikeRouter {
 		} else {
 			n0 = start.node; coords = [[this.lon[n0], this.lat[n0]]]; z0 = f.node_z[n0] * 0.1;
 		}
-		const segments = [];   // par tronçon : coordonnées + pente moyenne, pour colorer
-		const profile = [[0, z0]];   // [distance cumulée m, altitude m]
+		const segments = [];   // morceaux de pente régulière (profil simplifié des tronçons) : coordonnées + pente, pour colorer
+		const profile = [[0, z0]];   // par pas : [distance cumulée m, altitude m] (manœuvres)
+		const elev = [[0, z0, '']];  // profil fin : [distance cumulée m, altitude m, classe du morceau qui y mène]
 		const nodes = [n0], nodeIdx = [0];             // nœuds traversés (-1 : point en milieu de tronçon)
 		let dist = 0, dplus = 0, dminus = 0, time = 0;
 		for (const st of steps) {
@@ -612,15 +669,29 @@ class BikeRouter {
 			const fEnd = part ? st.f1 : (rev ? 0 : 1);
 			const end = fEnd === 0 ? f.edge_u[e] : fEnd === 1 ? f.edge_v[e] : -1;
 			profile.push([dist, end >= 0 ? f.node_z[end] * 0.1 : zAt(e, fEnd)]);
-			segments.push({
-				coords: pts,
-				grade: len > 0 ? (dp - dm) / len * 100 : 0,
-				cls: this.meta.classes[f.edge_cls[e]],
-			});
+			// morceaux entre les points du profil du tronçon compris dans la portion parcourue
+			const cls = this.meta.classes[f.edge_cls[e]], L = f.edge_len[e] * 0.1;
+			const fStart = part ? st.f0 : (rev ? 1 : 0);
+			const lo = Math.min(fStart, fEnd), hi = Math.max(fStart, fEnd);
+			const cut = this.edgeElev(e).filter(([fr]) => fr > lo && fr < hi);
+			if (fStart > fEnd) cut.reverse();
+			const marks = [[fStart, zAt(e, fStart)], ...cut, [fEnd, zAt(e, fEnd)]];
+			let d = dist - len;
+			for (let k = 1; k < marks.length; k++) {
+				const [fa, za] = marks[k - 1], [fb, zb] = marks[k];
+				const dd = Math.abs(fb - fa) * L;
+				d += dd;
+				segments.push({
+					coords: marks.length === 2 ? pts : this.sliceEdge(e, fa, fb),
+					grade: dd > 0 ? (zb - za) / dd * 100 : 0,
+					cls,
+				});
+				elev.push([d, zb, cls]);
+			}
 			for (let k = 1; k < pts.length; k++) coords.push(pts[k]);
 			nodes.push(end); nodeIdx.push(coords.length - 1);
 		}
-		return { coords, segments, profile, steps, nodes, nodeIdx,
+		return { coords, segments, profile, elev, steps, nodes, nodeIdx,
 			distance: dist, dplus, dminus, time, cost, explored, ms };
 	}
 
