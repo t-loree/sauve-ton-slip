@@ -25,6 +25,10 @@ const site = p => SITE + p;
 			${SECTIONS.map(s => `<a href="${s.href}"${cur(s)}>${icon(s.icon)}${s.long || s.label}</a>`).join('')}
 		</nav>`;
 	document.body.prepend(header);
+	// météo à droite de la barre (meteo.js) : chargée après la barre, sans bloquer la page
+	const meteo = document.createElement('script');
+	meteo.src = site('js/script/meteo.js');
+	document.body.append(meteo);
 
 	const tabs = document.createElement('nav');
 	tabs.className = 'tabbar';

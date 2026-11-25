@@ -552,6 +552,42 @@ class BikeRouter {
 		return res;
 	}
 
+	// Itinéraire par des points de passage : pts = [départ, passages…, arrivée] (résultats de locate()).
+	// Un calcul par tronçon (A* ou « le plus plat » si flatDetour est un nombre), puis tous les pas mis bout à
+	// bout et décrits d'un seul tenant : distance, D+, profil, couleurs de pente et manœuvres comme un trajet
+	// simple. route.vias = points de passage, route.legEnds[k] = indice dans coords de la fin du tronçon k (le
+	// guidage s'en sert pour ne viser que les points pas encore atteints).
+	// Renvoie la route, ou en mode plat { route, ref, lambda, runs, ms } comme flattest().
+	async routeVia(pts, profile, flatDetour = null) {
+		const t0 = performance.now();
+		const legs = [], refs = [];
+		let runs = 0, lambda = null;
+		for (let i = 0; i + 1 < pts.length; i++) {
+			if (flatDetour !== null) {
+				const fl = await this.flattest(pts[i], pts[i + 1], profile, flatDetour);
+				if (!fl) return null;
+				legs.push(fl.route); refs.push(fl.ref); runs += fl.runs; lambda = fl.lambda;
+			} else {
+				const r = await this.route(pts[i], pts[i + 1], profile);
+				if (!r) return null;
+				legs.push(r);
+			}
+		}
+		const joindre = rs => {
+			const res = rs.length === 1 ? rs[0] : this._describe(rs[0].src, rs.flatMap(r => r.steps),
+				rs.reduce((a, r) => a + r.cost, 0), rs.reduce((a, r) => a + r.explored, 0), performance.now() - t0);
+			res.src = rs[0].src; res.dst = rs[rs.length - 1].dst;
+			res.vias = pts.slice(1, -1);
+			// chaque tronçon partage son premier point avec la fin du précédent
+			let fin = -1;
+			res.legEnds = rs.map(r => (fin += r.coords.length - (fin < 0 ? 0 : 1)));
+			return res;
+		};
+		const route = joindre(legs);
+		if (flatDetour === null) return route;
+		return { route, ref: joindre(refs), lambda, runs, ms: performance.now() - t0 };
+	}
+
 	// Mode « le plus plat » : minimise le D+ sous contrainte de détour.
 	// maxDetour = 0.3 => au plus 30 % plus long que l'itinéraire de référence ; Infinity = illimité.
 	// Relaxation lagrangienne : on augmente le poids du dénivelé (λ = profile.hills) tant que la
@@ -746,6 +782,11 @@ class BikeRouter {
 			if (bIn === null || bOut === null) continue;
 			const headingIn = (bIn + 180) % 360;
 			const angle = BikeRouter._angleDiff(headingIn, bOut);
+			// point de passage au milieu d'un tronçon (pas de carrefour) : seulement un éventuel demi-tour
+			if (n < 0) {
+				if (Math.abs(angle) > 150) out.push({ k, coordIdx: i, dist: res.profile[k][0], type: 'turn', angle, side: angle < 0 ? 'left' : 'right' });
+				continue;
+			}
 
 			// entrée dans un rond-point : on compte les sorties jusqu'à celle qu'on prend
 			if (!isRb(eIn) && isRb(eOut)) {

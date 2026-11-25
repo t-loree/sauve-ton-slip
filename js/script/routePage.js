@@ -12,6 +12,7 @@ const PRESETS = {
 const $ = id => document.getElementById(id);
 const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 const statusEl = $('status');
+const mapWrap = document.querySelector('.mapwrap');
 
 // ------------------------------------------------------------------ carte
 const map = new ol.Map({
@@ -57,7 +58,11 @@ map.addLayer(new ol.layer.Vector({
 }));
 
 const markerSource = new ol.source.Vector();
-const markerStyle = label => new ol.style.Style({
+const viaStyle = new ol.style.Style({
+	image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: '#fff' }),
+		stroke: new ol.style.Stroke({ color: cssVar('--brand', '#0E6E6B'), width: 3 }) }),
+});
+const markerStyle = label => label === 'V' ? viaStyle : new ol.style.Style({
 	image: new ol.style.Circle({
 		radius: 11,
 		fill: new ol.style.Fill({ color: label === 'A' ? cssVar('--brand', '#0E6E6B') : cssVar('--danger', '#C8402F') }),
@@ -75,6 +80,29 @@ map.addLayer(new ol.layer.Vector({
 }));
 
 const markers = { A: null, B: null };
+// points de passage entre A et B, dans l'ordre du trajet (marqueurs « V » de markerSource)
+const vias = [];
+const VIA_MAX = 6;
+function clearVias() { vias.splice(0).forEach(v => markerSource.removeFeature(v)); }
+// indice du tronçon (A→P1 = 0, P1→P2 = 1…) le plus proche d'un point de l'itinéraire affiché
+function legAt(coord) {
+	if (!lastRoute?.legEnds) return vias.length;
+	const c = lastRoute.coords, kx = Math.cos(coord[1] * Math.PI / 180);
+	let best = 0, bd = Infinity;
+	for (let i = 0; i < c.length; i++) {
+		const d = ((c[i][0] - coord[0]) * kx) ** 2 + (c[i][1] - coord[1]) ** 2;
+		if (d < bd) { bd = d; best = i; }
+	}
+	const k = lastRoute.legEnds.findIndex(e => e >= best);
+	return k < 0 ? vias.length : k;
+}
+function addVia(coord, leg = legAt(coord)) {
+	if (vias.length >= VIA_MAX) { statusEl.textContent = `${VIA_MAX} points de passage au plus.`; return null; }
+	const f = new ol.Feature({ geometry: new ol.geom.Point(coord), label: 'V' });
+	markerSource.addFeature(f);
+	vias.splice(leg, 0, f);
+	return f;
+}
 const pointLabel = { A: null };
 function updatePoints() {
 	const set = (id, on, txtOn, txtOff) => { $(id).classList.toggle('set', on); $(id).querySelector('span').textContent = on ? txtOn : txtOff; };
@@ -87,6 +115,7 @@ function setMarker(label, coord) {
 		const r = regionAt(...coord);
 		if (r && r !== region) {                     // départ dans une autre région : son graphe, arrivée effacée
 			if (markers.B) { markerSource.removeFeature(markers.B); markers.B = null; }
+			clearVias();
 			useRegion(r);
 		}
 	}
@@ -106,6 +135,49 @@ map.addInteraction(translate);
 let draggingMarker = false;
 translate.on('translatestart', () => { draggingMarker = true; });
 translate.on('translateend', () => { setTimeout(() => { draggingMarker = false; }, 0); });
+
+// Souris : tirer l'itinéraire crée un point de passage sous le pointeur ; pendant le glisser, pointillés vers
+// les points voisins, calcul au relâcher. Au doigt, toucher l'itinéraire ajoute le point (puis on le fait
+// glisser) : tirer la ligne se confondrait avec le déplacement de la carte.
+const previewSource = new ol.source.Vector();
+map.addLayer(new ol.layer.Vector({ source: previewSource, zIndex: 9,
+	style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#13293D', width: 2.5, lineDash: [6, 6] }) }) }));
+const surItineraire = px => map.hasFeatureAtPixel(px, { layerFilter: l => l.getSource() === routeSource, hitTolerance: 6 });
+const surMarqueur = px => map.hasFeatureAtPixel(px, { layerFilter: l => l === markerLayer, hitTolerance: 4 });
+let tire = null;   // { f : point de passage tiré, avant, apres : coordonnées des points voisins }
+map.addInteraction(new ol.interaction.Pointer({
+	handleDownEvent(evt) {
+		const e = evt.originalEvent;
+		if (e.pointerType !== 'mouse' || e.button !== 0) return false;
+		if (!router || !markers.A || !markers.B || !lastRoute || !$('nav').classList.contains('is-hidden')) return false;
+		if (surMarqueur(evt.pixel) || !surItineraire(evt.pixel)) return false;
+		const f = addVia(evt.coordinate);
+		if (!f) return false;
+		const pts = [markers.A, ...vias, markers.B], i = pts.indexOf(f);
+		tire = { f, avant: pts[i - 1].getGeometry().getCoordinates(), apres: pts[i + 1].getGeometry().getCoordinates() };
+		draggingMarker = true;
+		return true;   // l'événement s'arrête ici : la carte ne se déplace pas
+	},
+	handleDragEvent(evt) {
+		tire.f.getGeometry().setCoordinates(evt.coordinate);
+		previewSource.clear();
+		previewSource.addFeature(new ol.Feature(new ol.geom.LineString([tire.avant, evt.coordinate, tire.apres])));
+	},
+	handleUpEvent() {
+		previewSource.clear();
+		tire = null;
+		// un simple clic sur la ligne passe aussi par ici : on ignore le « singleclick » qui suit (il retirerait le point)
+		setTimeout(() => { draggingMarker = false; }, 400);
+		computeRoute();
+		return false;
+	},
+}));
+// curseur : main sur l'itinéraire et les marqueurs (ordinateur)
+map.on('pointermove', evt => {
+	if (evt.dragging || evt.originalEvent.pointerType !== 'mouse') return;
+	map.getTargetElement().style.cursor = surMarqueur(evt.pixel) ? 'grab'
+		: (markers.A && markers.B && lastRoute && surItineraire(evt.pixel)) ? 'copy' : '';
+});
 
 // ------------------------------------------------------------------ points de service sur la carte
 // Une couche groupée par service, créée et chargée au premier affichage ; choix mémorisé.
@@ -166,7 +238,16 @@ async function showPoi(id, on) {
 
 map.on('singleclick', evt => {
 	if (draggingMarker || !router) return;
-	if (map.hasFeatureAtPixel(evt.pixel, { layerFilter: l => l === markerLayer })) return;
+	const mk = map.forEachFeatureAtPixel(evt.pixel, f => f, { layerFilter: l => l === markerLayer, hitTolerance: 4 });
+	if (mk) {   // toucher un point de passage le retire ; A et B se déplacent en les faisant glisser
+		if (mk.get('label') === 'V') { markerSource.removeFeature(mk); vias.splice(vias.indexOf(mk), 1); computeRoute(); }
+		return;
+	}
+	// toucher l'itinéraire (A et B placés) ajoute un point de passage, qu'on fait ensuite glisser
+	if (markers.A && markers.B && lastRoute && map.hasFeatureAtPixel(evt.pixel, { layerFilter: l => l.getSource() === routeSource, hitTolerance: 8 })) {
+		if (addVia(evt.coordinate)) computeRoute();
+		return;
+	}
 	// clic sur un point de service : groupe => zoom ; point isolé => départ / arrivée posé dessus
 	let coord = evt.coordinate;
 	const hit = map.forEachFeatureAtPixel(evt.pixel, f => f, { layerFilter: l => !!l.get('svc') });
@@ -183,6 +264,7 @@ map.on('singleclick', evt => {
 	}
 	if (!markers.A || (markers.A && markers.B)) {
 		if (markers.B) { markerSource.removeFeature(markers.B); markers.B = null; updatePoints(); }
+		clearVias();
 		routeSource.clear(); refSource.clear(); clearResults();
 		setMarker('A', coord);
 		statusEl.textContent = 'Touchez la carte pour placer l’arrivée.';
@@ -289,6 +371,8 @@ function drawRoute(r) {
 	if (markers.A && markers.B && $('nav').classList.contains('is-hidden')) {   // pas pendant la navigation (recalculs)
 		routeSource.addFeature(new ol.Feature({ geometry: new ol.geom.LineString([markers.A.getGeometry().getCoordinates(), r.coords[0]]), conn: true }));
 		routeSource.addFeature(new ol.Feature({ geometry: new ol.geom.LineString([r.coords[r.coords.length - 1], markers.B.getGeometry().getCoordinates()]), conn: true }));
+		vias.forEach((v, k) => r.legEnds && routeSource.addFeature(new ol.Feature({
+			geometry: new ol.geom.LineString([v.getGeometry().getCoordinates(), r.coords[r.legEnds[k]]]), conn: true })));
 	}
 	routeSource.addFeatures(r.segments.map(s => new ol.Feature({
 		geometry: new ol.geom.LineString(s.coords),
@@ -320,7 +404,16 @@ async function rerouteFrom(lon, lat) {
 	const dst = lastRoute.dst;
 	const src = await router.locate(lon, lat, profile);
 	if (src.e < 0) return null;
-	const r = flatMode() ? (await router.flattest(src, dst, profile, readDetour()))?.route : await router.route(src, dst, profile);
+	// points de passage encore devant : ceux dont le tronçon finit après le point de l'itinéraire le plus proche
+	let reste = [];
+	if (lastRoute.vias?.length) {
+		const c = lastRoute.coords, kx = Math.cos(lat * Math.PI / 180);
+		let ici = 0, bd = Infinity;
+		c.forEach((p, i) => { const d = ((p[0] - lon) * kx) ** 2 + (p[1] - lat) ** 2; if (d < bd) { bd = d; ici = i; } });
+		reste = lastRoute.vias.filter((v, k) => lastRoute.legEnds[k] > ici);
+	}
+	const res = await router.routeVia([src, ...reste, dst], profile, flatMode() ? readDetour() : null);
+	const r = flatMode() ? res?.route : res;
 	if (r) lastRoute = r;
 	return r;
 }
@@ -361,8 +454,9 @@ function clearResults() {
 let computeSeq = 0;
 async function computeRoute() {
 	if (!router || !markers.A || !markers.B) return;
-	if ([markers.A, markers.B].some(m => regionAt(...m.getGeometry().getCoordinates()) !== region)) {
+	if ([markers.A, ...vias, markers.B].some(m => regionAt(...m.getGeometry().getCoordinates()) !== region)) {
 		routeSource.clear(); refSource.clear(); clearResults();
+		++computeSeq; statusEl.classList.remove('calcul'); mapWrap.classList.remove('calcul');   // un calcul encore en cours ne s'affichera pas
 		statusEl.textContent = `Départ et arrivée doivent être tous deux dans ${REGIONS[region].label}.`;
 		return;
 	}
@@ -371,16 +465,24 @@ async function computeRoute() {
 	const [la, pa] = markers.A.getGeometry().getCoordinates();
 	const [lb, pb] = markers.B.getGeometry().getCoordinates();
 	const tiles0 = router.loadedTiles;
+	// indicateur tout de suite, puis une image pour que le navigateur l'affiche avant le calcul : le mode plat
+	// (plusieurs A*) occupe la page 1 à 3 s et empêcherait sinon tout affichage, minuteur compris
+	statusEl.textContent = 'Calcul de l’itinéraire…';
+	statusEl.classList.add('calcul');
+	mapWrap.classList.add('calcul');   // carte grisée + cycliste animé si le calcul dure (CSS, après 0,6 s)
+	await new Promise(res => requestAnimationFrame(() => setTimeout(res)));
+	if (seq !== computeSeq) return;
 	const slow = setTimeout(() => { if (seq === computeSeq) statusEl.textContent = 'Chargement du réseau…'; }, 300);
-	let sa, sb, r, flat = null;
+	let sa, sb, r, flat = null, sv = [];
 	try {
-		[sa, sb] = await Promise.all([router.locate(la, pa, profile), router.locate(lb, pb, profile)]);
-		if (sa.node < 0 || sb.node < 0) { r = null; }
+		[sa, sb, ...sv] = await Promise.all([router.locate(la, pa, profile), router.locate(lb, pb, profile),
+			...vias.map(v => router.locate(...v.getGeometry().getCoordinates(), profile))]);
+		if (sa.node < 0 || sb.node < 0 || sv.some(v => v.node < 0)) { r = null; }
 		else if (flatMode()) {
-			flat = await router.flattest(sa, sb, profile, readDetour());
+			flat = await router.routeVia([sa, ...sv, sb], profile, readDetour());
 			r = flat && flat.route;
 		} else {
-			r = await router.route(sa, sb, profile);
+			r = await router.routeVia([sa, ...sv, sb], profile);
 		}
 	} catch (err) {
 		console.error(err);
@@ -388,12 +490,13 @@ async function computeRoute() {
 		return;
 	} finally {
 		clearTimeout(slow);
+		if (seq === computeSeq) { statusEl.classList.remove('calcul'); mapWrap.classList.remove('calcul'); }
 	}
 	if (seq !== computeSeq) return;
 	routeSource.clear();
 	refSource.clear();
 	if (!r) {
-		statusEl.textContent = sa.node < 0 || sb.node < 0 ? `Point hors de la zone couverte (${REGIONS[region].label}).` : 'Aucun itinéraire trouvé avec ce profil.';
+		statusEl.textContent = sa.node < 0 || sb.node < 0 || sv.some(v => v.node < 0) ? `Point hors de la zone couverte (${REGIONS[region].label}).` : 'Aucun itinéraire trouvé avec ce profil.';
 		clearResults();
 		return;
 	}
@@ -427,7 +530,8 @@ async function computeRoute() {
 		$('r-perf').textContent = `${r.ms.toFixed(1)} ms · ${r.explored.toLocaleString('fr')} nœuds explorés` + snap;
 	}
 	$('results').classList.remove('is-hidden');
-	statusEl.textContent = 'Faites glisser A ou B pour ajuster. Toucher la carte recommence.';
+	statusEl.textContent = (vias.length ? `${vias.length} point${vias.length > 1 ? 's' : ''} de passage. ` : '')
+		+ 'Faites glisser A, B ou un point de passage. Touchez l’itinéraire pour ajouter un détour, un point de passage pour le retirer. Toucher ailleurs recommence.';
 	drawProfile();
 }
 
@@ -540,7 +644,7 @@ map.on('moveend', () => {
 });
 
 (async () => {
-	// lien depuis une page de service : ?a=lon,lat&b=lon,lat[&from=me][&svc=<service>]
+	// lien depuis une page de service : ?a=lon,lat&b=lon,lat[&via=lon,lat;lon,lat][&from=me][&svc=<service>]
 	const q = new URLSearchParams(location.search);
 	const parse = v => { const c = (v || '').split(',').map(Number); return c.length === 2 && c.every(Number.isFinite) ? c : null; };
 	const qa = parse(q.get('a')), qb = parse(q.get('b'));
@@ -549,6 +653,7 @@ map.on('moveend', () => {
 		map.getView().setCenter(qa);
 		setMarker('A', qa);
 		setMarker('B', qb);
+		(q.get('via') || '').split(';').map(parse).filter(Boolean).slice(0, VIA_MAX).forEach(c => addVia(c, vias.length));
 		if (q.get('from') === 'me') pointLabel.A = 'Ma position';
 	}
 	await useRegion(start);

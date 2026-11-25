@@ -2,7 +2,7 @@
 // Stratégie « stale-while-revalidate » : réponse immédiate depuis le cache (aucune attente
 // réseau, économe en batterie), mise à jour du cache en arrière-plan pour la fois suivante.
 // Changer CACHE force le re-téléchargement complet.
-const CACHE = 'cyclo-v32';
+const CACHE = 'cyclo-v43';
 const DEV = ['localhost', '127.0.0.1'].includes(self.location.hostname);
 
 const ASSETS = [
@@ -18,6 +18,8 @@ const ASSETS = [
 	'css/ol.css',
 	'js/lib/ol.js',
 	'js/script/layout.js',
+	'js/script/meteo.js',
+	'js/script/pluie.js',
 	'js/script/poi.js',
 	'js/script/services.js',
 	'js/script/router.js',
@@ -25,6 +27,7 @@ const ASSETS = [
 	'js/script/routePage.js',
 	'img/icons.svg',
 	'img/logo.svg',
+	'img/velo-anime.svg',
 	'img/glyph/water.svg',
 	'img/glyph/toilet.svg',
 	'img/glyph/repair.svg',
@@ -54,13 +57,14 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
 	event.waitUntil(
 		caches.keys().then(keys =>
-			Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+			// seulement nos anciennes versions : « sts-radar » (pluie.js) se gère lui-même
+			Promise.all(keys.filter(k => k.startsWith('cyclo-') && k !== CACHE).map(k => caches.delete(k)))
 		)
 	);
 	self.clients.claim();
 });
 
-// Les requêtes externes (tuiles OSM) passent directement au réseau
+// Les requêtes externes (tuiles OSM, météo Open-Meteo, radar RainViewer) passent directement au réseau
 self.addEventListener('fetch', event => {
 	const req = event.request;
 	// seulement nos fichiers : le domaine (t-loree.github.io) est partagé avec d'autres projets

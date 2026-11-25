@@ -4,7 +4,7 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self' https://api.open-meteo.com https://api.rainviewer.com https://tilecache.rainviewer.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 	<meta name="referrer" content="strict-origin-when-cross-origin">
 	<title>Itinéraire — Sauve ton slip</title>
 	<link rel="manifest" href="../../manifest.json">
@@ -172,6 +172,7 @@
 
 		<section class="mapwrap">
 			<div id="map"></div>
+			<div class="calcul-carte" aria-hidden="true"><img src="../../img/velo-anime.svg" alt=""><span>Calcul de l’itinéraire…</span></div>
 		</section>
 	</main>
 
