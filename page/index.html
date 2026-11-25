@@ -62,11 +62,19 @@
 		.why strong { display: block; margin-bottom: .25rem; }
 		.why p { font-size: .9rem; color: var(--ink-2); }
 
+		.avis { display: grid; grid-template-columns: repeat(3, 1fr); gap: .9rem; }
+		.avis figure { margin: 0; padding: 1rem 1.1rem; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: .5rem; }
+		.avis .stars { color: var(--accent); letter-spacing: .1em; font-size: .95rem; }
+		.avis blockquote { margin: 0; font-size: .95rem; }
+		.avis figcaption { margin-top: auto; font-size: .85rem; color: var(--ink-2); }
+		.avis-note { margin-top: .7rem; font-size: .8rem; color: var(--ink-2); font-style: italic; }
+
 		@media (max-width: 899px) {
 			.cta { grid-template-columns: 1fr; padding: 1.3rem; }
 			.cta svg.art { order: -1; max-height: 120px; }
 			.tiles { grid-template-columns: repeat(2, 1fr); }
 			.why { grid-template-columns: 1fr; }
+			.avis { grid-template-columns: 1fr; }
 			.hero { padding-top: 1.4rem; }
 		}
 	</style>
@@ -142,10 +150,21 @@
 			<div><strong>Sobre</strong><p>Le mode économe coupe le GPS entre deux virages et affiche un écran presque noir.</p></div>
 			<div><strong>Données ouvertes</strong><p>Routes OpenStreetMap, altitudes RGE ALTI® de l'IGN à 5 m de résolution.</p></div>
 		</div>
+		<h2 class="section-title">Ils ont sauvé leur slip</h2>
+		<div class="avis">
+			<figure><div class="stars" aria-label="5 étoiles sur 5">★★★★★</div><blockquote>«&nbsp;J'ai sauvé mon cuissard ASOS à 300&nbsp;€. Merci Sauve ton slip&nbsp;!&nbsp;»</blockquote><figcaption>Gwen, Quimper</figcaption></figure>
+			<figure><div class="stars" aria-label="5 étoiles sur 5">★★★★★</div><blockquote>«&nbsp;Kouign-amann à Douarnenez, trône à 400&nbsp;m. L'appli m'a guidé à temps. Je recommande les deux.&nbsp;»</blockquote><figcaption>Yann, Douarnenez</figcaption></figure>
+			<figure><div class="stars" aria-label="4 étoiles sur 5">★★★★☆</div><blockquote>«&nbsp;Le mode le plus plat m'a évité la montée du Maïdo. J'ai mis 3&nbsp;h de plus, mais aucune goutte de sueur.&nbsp;»</blockquote><figcaption>Nathalie, Saint-Paul</figcaption></figure>
+			<figure><div class="stars" aria-label="5 étoiles sur 5">★★★★★</div><blockquote>«&nbsp;Hors ligne, en pleine campagne, sans réseau et sans papier. L'appli, elle, avait tout prévu.&nbsp;»</blockquote><figcaption>Loïc, Monts d'Arrée</figcaption></figure>
+			<figure><div class="stars" aria-label="5 étoiles sur 5">★★★★★</div><blockquote>«&nbsp;Avant je roulais crispé. Maintenant je roule serein.&nbsp;»</blockquote><figcaption>Patrice, Saint-Malo</figcaption></figure>
+			<figure><div class="stars" aria-label="1 étoile sur 5">★☆☆☆☆</div><blockquote>«&nbsp;Trouvé les toilettes en 2&nbsp;minutes. Fermées le dimanche. Une étoile, par principe.&nbsp;»</blockquote><figcaption>Jean-Mi, Brest</figcaption></figure>
+		</div>
+		<p class="avis-note">Avis 100&nbsp;% inventés. Les slips sauvés, eux, sont bien réels.</p>
 	</main>
 
 	<footer class="footer">
-		Données © contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Altitudes RGE ALTI® © IGN
+		Données © contributeurs <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Altitudes RGE ALTI® © IGN<br>
+		Un bug, une idée, un slip à sauver&nbsp;? <a href="https://github.com/t-loree/sauve-ton-slip/issues" target="_blank" rel="noopener">Écrivez-nous sur GitHub</a>
 	</footer>
 	<script src="../js/script/layout.js"></script>
 </body>

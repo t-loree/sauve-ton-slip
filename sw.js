@@ -2,7 +2,7 @@
 // Stratégie « stale-while-revalidate » : réponse immédiate depuis le cache (aucune attente
 // réseau, économe en batterie), mise à jour du cache en arrière-plan pour la fois suivante.
 // Changer CACHE force le re-téléchargement complet.
-const CACHE = 'cyclo-v31';
+const CACHE = 'cyclo-v32';
 const DEV = ['localhost', '127.0.0.1'].includes(self.location.hostname);
 
 const ASSETS = [
