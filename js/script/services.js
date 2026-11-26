@@ -271,13 +271,66 @@ function select(f, { pan = false } = {}) {
 		</div>
 		<div class="btn-row">
 			<button class="btn btn-primary" id="btn-go">${ICON('route')}Itinéraire à vélo</button>
-			<a class="btn" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=${c[1].toFixed(6)}&mlon=${c[0].toFixed(6)}#map=18/${c[1].toFixed(6)}/${c[0].toFixed(6)}">OpenStreetMap</a>
-		</div>`;
+			<a class="btn" id="btn-ext" target="_blank" rel="noopener" href="https://www.openstreetmap.org/?mlat=${c[1].toFixed(6)}&mlon=${c[0].toFixed(6)}#map=18/${c[1].toFixed(6)}/${c[0].toFixed(6)}">OpenStreetMap</a>
+		</div>
+		${signalHtml(f, c)}`;
 	card.classList.remove('is-hidden');
 	card.querySelector('.detail-close').addEventListener('click', unselect);
 	$('btn-go').addEventListener('click', () => routeTo(f));
+	panoramaxLink(f, c);
 	updateList();
 	if (window.matchMedia('(max-width: 899px)').matches) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// « Un problème ? » : pas d'API, deux liens vers OSM, source unique des données (rien n'est corrigé ici).
+// Sans compte : note OSM sur le point. Avec compte : thème MapComplete (corriger, ajouter une photo → Panoramax).
+const MC_THEME = { toilet: 'toilets', drinking_water: 'drinking_water', graveyard: 'drinking_water' };
+function signalHtml(f, c) {
+	const lat = c[1].toFixed(6), lon = c[0].toFixed(6);
+	const theme = MC_THEME[f.get('stype')] || 'cyclofix';
+	const osm = /^([nwr])(\d+)$/.exec(f.get('id') || '');
+	const obj = osm ? `#${{ n: 'node', w: 'way', r: 'relation' }[osm[1]]}/${osm[2]}` : '';
+	return `
+		<details class="fold fold-sub" id="signal">
+			<summary>Un problème ?<svg class="icon chev" aria-hidden="true"><use href="${site('img/icons.svg')}#i-chevron"/></svg></summary>
+			<p class="small" style="margin: .5rem 0 .2rem;">Fermé, disparu, mal placé, payant… Les données viennent d’OpenStreetMap : c’est là que ça se corrige, et le site suivra à la prochaine mise à jour.</p>
+			<div class="btn-row">
+				<a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.openstreetmap.org/note/new#map=19/${lat}/${lon}">Signaler sans compte</a>
+				<a class="btn btn-sm" target="_blank" rel="noopener" href="https://mapcomplete.org/${theme}?z=19&lat=${lat}&lon=${lon}&fs-welcome-message=false${obj}">Corriger ou ajouter une photo</a>
+			</div>
+			<p class="tiny" style="margin: .5rem 0 0;"><strong>Sans compte</strong> : une note OpenStreetMap ; placez le marqueur sur l’objet et décrivez le problème, un contributeur s’en chargera.
+			<strong>Pour prendre une photo</strong> ou corriger vous-même : MapComplete (compte OpenStreetMap gratuit) ; vos photos partent sur Panoramax.</p>
+		</details>`;
+}
+
+// Panoramax (toutes les pages de services) : s'il existe une photo de rue à moins de PANO_M mètres, le bouton
+// « OpenStreetMap » de la fiche devient « Panoramax » et ouvre cette photo. Sinon (aucune photo,
+// hors ligne, API lente) le bouton OSM reste. Réponse gardée par point (null = rien trouvé).
+const PANO_API = 'https://api.panoramax.xyz/api/search';
+const PANO_M = 30;
+const panoCache = new Map();
+async function panoramaxLink(f, c) {
+	const key = c[0].toFixed(6) + ',' + c[1].toFixed(6);
+	let pic = panoCache.get(key);
+	if (pic === undefined) {
+		try {
+			const q = new URLSearchParams({ place_position: key, place_distance: `0-${PANO_M}`, limit: '1' });
+			const resp = await fetch(`${PANO_API}?${q}`, { signal: AbortSignal.timeout(8000) });
+			if (!resp.ok) return;
+			const ft = (await resp.json()).features?.[0];
+			pic = ft ? { id: ft.id, c: ft.geometry.coordinates } : null;
+			panoCache.set(key, pic);
+		} catch { return; }
+	}
+	const a = $('btn-ext');
+	if (!pic || selected !== f || !a) return;
+	const [lon, lat] = pic.c;
+	// xyz=cap/inclinaison/champ : le cap (absolu, degrés depuis le nord) tourne la vue 360° vers le point,
+	// sinon le visualiseur s'ouvre dans le sens de la prise de vue (souvent face à la route).
+	const cap = (Math.atan2((c[0] - lon) * Math.cos(lat * Math.PI / 180), c[1] - lat) * 180 / Math.PI + 360) % 360;
+	a.href = `https://api.panoramax.xyz/#focus=pic&pic=${encodeURIComponent(pic.id)}&map=19/${lat.toFixed(6)}/${lon.toFixed(6)}&xyz=${cap.toFixed(1)}/0/30`;
+	a.textContent = 'Panoramax';
+	a.title = `Photo de rue à ${fmtDist(distM(c, pic.c))}`;
 }
 
 function unselect() {
